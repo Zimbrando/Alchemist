@@ -12,6 +12,7 @@ import Util.isMac
 import Util.isMultiplatform
 import Util.isWindows
 import org.panteleyev.jpackage.ImageType
+import org.panteleyev.jpackage.JPackageTask
 
 plugins {
     application
@@ -42,8 +43,30 @@ val copyForPackaging by tasks.registering(Copy::class) {
     dependsOn(tasks.shadowJar)
 }
 
-// JPackage
+open class CustomJPackageTask() : JPackageTask() {
+    @TaskAction
+    override fun action() {
+        var types: List<ImageType>
+        when {
+            isWindows -> types = listOf(ImageType.EXE, ImageType.MSI)
+            isMac -> types = listOf(ImageType.DMG, ImageType.PKG)
+            else -> types = listOf(ImageType.DEB, ImageType.RPM)
+        }
+        types.forEach {
+            setType(it)
+            super.action()
+        }
+    }
+}
+
+// jpackageFull should be used instead
 tasks.jpackage {
+    enabled = false
+}
+
+val jpackageFull by tasks.registering(CustomJPackageTask::class) {
+    group = "Distribution"
+    description = "Creates application bundle in every supported type using jpackage"
     // General info
     resourceDir = "${project.projectDir}/package-settings"
     appName = rootProject.name
@@ -62,20 +85,16 @@ tasks.jpackage {
 
     linux {
         icon = "${project.projectDir}/package-settings/logo.png"
-        type = ImageType.RPM
     }
     windows {
         icon = "${project.projectDir}/package-settings/logo.ico"
-        type = ImageType.MSI
         winDirChooser = true
         winShortcutPrompt = true
         winPerUserInstall = isInCI
     }
     mac {
         icon = "${project.projectDir}/package-settings/logo.png"
-        type = ImageType.PKG
     }
-
     dependsOn(copyForPackaging)
 }
 
@@ -90,13 +109,17 @@ tasks.register<Exec>("testJpackageOutput") {
     workingDir = rootProject.file("build/package/")
     doFirst {
         val version = rootProject.version.toString().substringBefore('-')
-        // Extract the packet
+        // Extract the packets
         when {
-            isWindows -> commandLine("msiexec", "-i", "${rootProject.name}-$version.msi", "-quiet", "INSTALLDIR=${workingDir.path}\\install")
+            isWindows -> {
+                commandLine("msiexec", "-i", "${rootProject.name}-$version.msi", "-quiet", "INSTALLDIR=${workingDir.path}\\install")
+                commandLine("./${rootProject.name}-$version.exe", "-quiet", "INSTALLDIR=${workingDir.path}\\install")
+            }
             isMac -> commandLine("sudo", "installer", "-pkg", "${rootProject.name}-$version.pkg", "-target", "/")
             else -> {
                 workingDir.resolve("install").mkdirs()
                 commandLine("bsdtar", "-xf", "${rootProject.name}-$version-1.x86_64.rpm", "-C", "install")
+                commandLine("dpkg-deb", "-x", "${rootProject.name}_${version}_amd64.deb", "install")
             }
         }
     }
@@ -123,7 +146,7 @@ tasks.register<Exec>("testJpackageOutput") {
         require(tasks.jpackage.get().mainJar in appFiles)
     }
 
-    dependsOn(tasks.jpackage)
+    dependsOn(jpackageFull)
     finalizedBy(deleteJpackageOutput)
 }
 
