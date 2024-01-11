@@ -12,6 +12,7 @@ import Util.isMac
 import Util.isMultiplatform
 import Util.isWindows
 import org.panteleyev.jpackage.ImageType
+import org.panteleyev.jpackage.JPackageTask
 
 plugins {
     application
@@ -42,8 +43,30 @@ val copyForPackaging by tasks.registering(Copy::class) {
     dependsOn(tasks.shadowJar)
 }
 
-// JPackage
+open class CustomJPackageTask() : JPackageTask() {
+    @TaskAction
+    override fun action() {
+        var types: List<ImageType>
+        when {
+            isWindows -> types = listOf(ImageType.EXE, ImageType.MSI)
+            isMac -> types = listOf(ImageType.DMG, ImageType.PKG)
+            else -> types = listOf(ImageType.DEB, ImageType.RPM)
+        }
+        types.forEach {
+            setType(it)
+            super.action()
+        }
+    }
+}
+
+// jpackageFull should be used instead
 tasks.jpackage {
+    enabled = false
+}
+
+val jpackageFull by tasks.registering(CustomJPackageTask::class) {
+    group = "Distribution"
+    description = "Creates application bundle in every supported type using jpackage"
     // General info
     resourceDir = "${project.projectDir}/package-settings"
     appName = rootProject.name
@@ -57,25 +80,21 @@ tasks.jpackage {
     // Packaging settings
     input = rootProject.layout.buildDirectory.map { it.dir("package-input") }.get().asFile.path
     destination = rootProject.layout.buildDirectory.map { it.dir("package") }.get().asFile.path
-    mainJar = "alchemist-full-${rootProject.version}-all.jar"
-    mainClass = "it.unibo.alchemist.Alchemist"
+    mainJar = tasks.shadowJar.get().archiveFileName.get()
+    mainClass = application.mainClass.get()
 
     linux {
         icon = "${project.projectDir}/package-settings/logo.png"
-        type = ImageType.RPM
     }
     windows {
         icon = "${project.projectDir}/package-settings/logo.ico"
-        type = ImageType.MSI
         winDirChooser = true
         winShortcutPrompt = true
         winPerUserInstall = isInCI
     }
     mac {
         icon = "${project.projectDir}/package-settings/logo.png"
-        type = ImageType.PKG
     }
-
     dependsOn(copyForPackaging)
 }
 
@@ -83,47 +102,76 @@ val deleteJpackageOutput by tasks.registering(Delete::class) {
     setDelete(project.file("build/package/install"))
 }
 
-tasks.register<Exec>("testJpackageOutput") {
+tasks.register("testJpackageOutput") {
     group = "Verification"
     description = "Verifies the jpackage output correctness for the OS running the script"
-    isIgnoreExitValue = true
-    workingDir = rootProject.file("build/package/")
+    val workingDirectory = rootProject.file("build/package/")
+    val linuxOutputDirs = mapOf("rpm" to "install-rpm", "deb" to "install-deb")
+    val windowsOutputDirs = mapOf("msi" to "install-msi", "exe" to "install-exe")
     doFirst {
         val version = rootProject.version.toString().substringBefore('-')
-        // Extract the packet
+        // Extract the packets
         when {
-            isWindows -> commandLine("msiexec", "-i", "${rootProject.name}-$version.msi", "-quiet", "INSTALLDIR=${workingDir.path}\\install")
-            isMac -> commandLine("sudo", "installer", "-pkg", "${rootProject.name}-$version.pkg", "-target", "/")
+            isWindows -> {
+                exec {
+                    commandLine("msiexec", "-i", "${rootProject.name}-$version.msi", "-quiet", "INSTALLDIR=${workingDirectory.path}\\${windowsOutputDirs["msi"]}")
+                    workingDir = workingDirectory
+                }
+                exec {
+                    commandLine("${rootProject.name}-$version.exe", "/quiet", "INSTALLDIR=${workingDirectory.path}\\${windowsOutputDirs["exe"]}")
+                    workingDir = workingDirectory
+                }
+            }
+            isMac -> {
+                exec {
+                    commandLine("sudo", "installer", "-pkg", "${rootProject.name}-$version.pkg", "-target", "/")
+                    workingDir = workingDirectory
+                }
+            }
             else -> {
-                workingDir.resolve("install").mkdirs()
-                commandLine("bsdtar", "-xf", "${rootProject.name}-$version-1.x86_64.rpm", "-C", "install")
+                workingDirectory.resolve("install-rpm").mkdirs()
+                workingDirectory.resolve("install-deb").mkdirs()
+                exec {
+                    commandLine("bsdtar", "-xf", "${rootProject.name}-$version-1.x86_64.rpm", "-C", "${linuxOutputDirs["rpm"]}")
+                    workingDir = workingDirectory
+                }
+                exec {
+                    commandLine("dpkg-deb", "-x", "${rootProject.name}_$version-1_amd64.deb", "${linuxOutputDirs["deb"]}")
+                    workingDir = workingDirectory
+                }
             }
         }
     }
     doLast {
         // Check if package contains every file needed
-        var execFiles: List<String>
-        var appFiles: List<String>
         when {
             isWindows -> {
-                execFiles = workingDir.resolve("install").listFiles().map { it.name }
-                appFiles = workingDir.resolve("install/app").listFiles().map { it.name }
+                windowsOutputDirs.forEach {
+                    val execFiles = workingDirectory.resolve(it.value).listFiles().map { it.name }
+                    val appFiles = workingDirectory.resolve("${it.value}/app").listFiles().map { it.name }
+                    require("${rootProject.name}.exe" in execFiles)
+                    require(jpackageFull.get().mainJar in appFiles)
+                }
             }
             isMac -> {
                 val root = File("/Applications/${rootProject.name}.app")
-                execFiles = root.resolve("Contents/MacOS").listFiles().map { it.name }
-                appFiles = root.resolve("Contents/app").listFiles().map { it.name }
+                val execFiles = root.resolve("Contents/MacOS").listFiles().map { it.name }
+                val appFiles = root.resolve("Contents/app").listFiles().map { it.name }
+                require(rootProject.name in execFiles)
+                require(jpackageFull.get().mainJar in appFiles)
             }
             else -> {
-                execFiles = workingDir.resolve("install/opt/alchemist/bin").listFiles().map { it.name }
-                appFiles = workingDir.resolve("install/opt/alchemist/lib/app").listFiles().map { it.name }
+                linuxOutputDirs.forEach {
+                    val execFiles = workingDirectory.resolve("${it.value}/opt/alchemist/bin").listFiles().map { it.name }
+                    val appFiles = workingDirectory.resolve("${it.value}/opt/alchemist/lib/app").listFiles().map { it.name }
+                    require(rootProject.name in execFiles)
+                    require(jpackageFull.get().mainJar in appFiles)
+                }
             }
         }
-        require(rootProject.name in execFiles || "${rootProject.name}.exe" in execFiles)
-        require(tasks.jpackage.get().mainJar in appFiles)
     }
 
-    dependsOn(tasks.jpackage)
+    dependsOn(jpackageFull)
     finalizedBy(deleteJpackageOutput)
 }
 
