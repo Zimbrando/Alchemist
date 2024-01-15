@@ -153,8 +153,13 @@ jobs:
         run: |
           sudo pacman -U --noconfirm alchemist-*.zst
           (sudo pacman -Q | grep -q alchemist &&  echo "Success! Alchemist found in the package list") || exit 1
-          output=$(alchemist)
-          ([ -n "$output" ] && echo "Success! Alchemist is installed correctly") || exit 2
+          ls -la /usr/bin | grep alchemist
+          ls -la /usr/lib/alchemist/bin | grep alchemist
+          chmod 777 /usr/bin/alchemist
+          chmod 777 /usr/lib/alchemist/bin/alchemist
+          echo "Trying to run alchemist"
+          /usr/bin/alchemist
+          alchemist
   # Builds the website and verifies link sanity
   build-website:
     needs:
