@@ -124,7 +124,6 @@ jobs:
     runs-on:  ubuntu-22.04
     container: 
       image: archlinux:base-devel
-      options: --user 1001
     if: >-
       github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     concurrency:
@@ -133,6 +132,7 @@ jobs:
     steps:
       - name: Setup arch
         run: sudo pacman --noconfirm -Syu && sudo pacman --noconfirm -Sy namcap git
+      - run: git config --system --add safe.directory /__w/Alchemist/Alchemist # https://github.com/actions/checkout/issues/1169
       - name: Checkout
         uses: danysk/action-checkout@0.2.14
       - name: Setup Java
@@ -141,7 +141,7 @@ jobs:
           java-version: ${{ needs.select-java-version.outputs.java-version }}
           distribution: 'temurin'
       - name: Generate PKGBUILD
-        run: ./gradlew generatePKGBUILD -DgeneratePKGBUILD.testSource=true
+        run: ./gradlew generatePKGBUILD --info -DgeneratePKGBUILD.testSource=true
       - name: Test PKGBUILD
         run: |
           cd build/package
