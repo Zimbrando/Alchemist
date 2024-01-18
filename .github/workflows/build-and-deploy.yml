@@ -237,6 +237,7 @@ jobs:
         with:
           path: build/package/
           pattern: installer-package-*
+          merge-multiple: true
       - name: Find the version of Node from package.json
         id: node-version
         run: echo "version=$(jq -r .engines.node package.json)" >> $GITHUB_OUTPUT
