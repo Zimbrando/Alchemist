@@ -183,7 +183,28 @@ validFormats.forEach { packaging: ValidPackaging ->
         aboutUrl = "https://alchemistsimulator.github.io/"
         appDescription = rootProject.description
         licenseFile = "${rootProject.projectDir}/LICENSE.md"
-
+        addModules = listOf(
+            "java.base",
+            "java.instrument",
+            "java.naming",
+            "java.net.http",
+            "java.prefs",
+            "java.rmi",
+            "java.scripting",
+            "java.security.jgss",
+            "java.security.sasl",
+            "java.sql",
+            "jdk.attach",
+            "jdk.compiler",
+            "jdk.httpserver",
+            "jdk.jdi",
+            "jdk.jfr",
+            "jdk.jsobject",
+            "jdk.management",
+            "jdk.unsupported",
+            "jdk.unsupported.desktop",
+            "jdk.xml.dom",
+        )
         type = packaging.format
         input = tasks.shadowJar.get().archiveFile.get().asFile.parent
         // Packaging settings
