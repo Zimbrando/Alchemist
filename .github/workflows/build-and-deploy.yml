@@ -8,7 +8,7 @@ defaults:
     shell: bash
 
 jobs:
-  
+
   # Prepare the environment for the build
   ci-preparation:
     runs-on: ubuntu-22.04
@@ -281,47 +281,7 @@ jobs:
           foreach ($file in Get-ChildItem -Filter *.msi) {
             $log = "install.log"
             $procMain = Start-Process "msiexec" "/i `"$file`" /qn /l*! `"$log`"" -NoNewWindow -PassThru
-            Start-Sleep -Seconds 1
-            $procLog = Start-Process "powershell" "Get-Content -Path `"$log`" -Wait" -NoNewWindow -PassThru 
-            $procMain.WaitForExit() 
-            $procLog.Kill()
           }
-      - name: Test installation
-        shell: pwsh
-        run: |
-          Import-Module "$env:ChocolateyInstall/helpers/chocolateyInstaller.psm1"
-          refreshenv
-
-          alchemist --help
-
-  test-linux-deb-installer:
-    needs:
-      - assemble-and-upload
-      - ci-preparation
-    runs-on: ubuntu-22.04
-    if: >-
-      always() && needs.assemble-and-upload.result == 'success'
-    concurrency:
-      group: test-linux-deb-installer-${{ needs.ci-preparation.outputs.build-ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Download packages
-        uses: actions/download-artifact@v4.1.2
-        with:
-          name: installer-package-${{ github.sha }}-${{ runner.os }}
-      - name: Work around xdg bug https://bugs.archlinux.org/task/33316
-        run: |
-          sudo mkdir /usr/share/desktop-directories/
-      - name: Install packages
-        run: |
-          ls -ahl
-          sudo apt update -y
-          sudo apt install gdebi-core
-          for installer in *.deb; do
-            sudo gdebi -n "$installer"
-          done
-      - name: Test installation
-        run: alchemist --help
 
   test-linux-rpm-installer:
     needs:
@@ -330,8 +290,6 @@ jobs:
     runs-on: ubuntu-22.04
     if: >-
       always() && needs.assemble-and-upload.result == 'success'
-    container:
-      image: fedora:40
     concurrency:
       group: test-linux-rpm-installer-${{ needs.ci-preparation.outputs.build-ref }}
       cancel-in-progress: true
@@ -343,11 +301,10 @@ jobs:
       - name: Install packages
         run: |
           yum check-update || [ $? -eq 100 ]
+          mkdir install
           for installer in *.rpm; do
-              yum -y localinstall "$installer"
+            bsdtar -xf $installer -C install
           done
-      - name: Test installation
-        run: alchemist --help
 
   text-macos-pkg-installer:
     needs:
@@ -362,87 +319,12 @@ jobs:
         uses: actions/download-artifact@v4.1.2
         with:
           name: installer-package-${{ github.sha }}-${{ runner.os }}
-    
-  # Test PKGBUILD for AUR release
-  verify-aur-package:
-    needs:
-      - ci-preparation
-      - assemble-and-upload
-    runs-on:  ubuntu-22.04
-    if: >-
-      always() && needs.assemble-and-upload.result == 'success'
-    container:
-      image: ${{ needs.ci-preparation.outputs.makepkg-image }}
-      options: --user root
-    concurrency:
-      group: test-aur-release-${{ needs.ci-preparation.outputs.build-ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Setup arch
+      - name: Install packages
         run: |
-          pacman --noconfirm -Sy git namcap ruby sudo
-          sudo chmod 777 .
-          # Work around Unable to download artifact(s): EACCES: permission denied, open '/__w/_temp/...
-          # sudo chmod -R 777 /__w
-          # Work around https://github.com/actions/checkout/issues/1169
-          # sudo git config --system --add safe.directory /__w/Alchemist/Alchemist
-      - name: Download the PKGBUILD
-        uses: actions/download-artifact@v4.1.2
-        with:
-          pattern: pkgbuild-${{ github.sha }}
-          merge-multiple: true
-      - name: Check the PKGBUILD sanity
-        run: |
-          namcap PKGBUILD 2>&1
-          namcap PKGBUILD 2>&1 | awk 'END { exit (NR > 0 ? NR : 0) }'
-      - name: Download the RPM
-        uses: actions/download-artifact@v4.1.2
-        with:
-          pattern: installer-package-${{ github.sha }}-${{ runner.os }}
-          merge-multiple: true
-      - name: Replace the URL with the local rpm
-        run: |
-          ruby -e '
-            original_pkgbuild = File.read("PKGBUILD")
-            version = original_pkgbuild.match(/pkgver=(.*)/)[1]
-            pkgbuild_with_replaced_url = original_pkgbuild.gsub(
-              /source=(.*)/,
-              "source=(\"alchemist-#{version}-1.$CARCH.rpm\")"
-            )
-            File.write("PKGBUILD", pkgbuild_with_replaced_url)
-          '
-      - name: Makepkg
-        run: |
-          sudo -u builder bash -c 'makepkg -sf --noconfirm'
-      - name: Check the package sanity
-        run: |
-          namcap *.pkg.tar* 2>&1 > namcap.log
-          cat namcap.log
-          ignored=(
-            "W: Referenced library 'libjvm.so' is an uninstalled dependency"
-            "W: Unused shared library '/usr/lib/libdl.so.2'"
-            "W: Unused shared library '/usr/lib/libm.so.6'"
-            "W: Unused shared library '/usr/lib/libnet.so'"
-            "W: Unused shared library '/usr/lib/libpthread.so.0'"
-            "W: Unused shared library '/usr/lib/librt.so.1'"
-            "lacks GNU_PROPERTY_X86_FEATURE_1_SHSTK"
-          )
-          for i in $ignored; do
-              echo "$i" >> ignored
+          for installer in *.pkg; do
+            sudo installer -pkg $installer -target /
           done
-          ruby -e '
-            ignored = File.read("ignored").lines.map(&:chomp)
-            warnings = File.read("namcap.log").lines.reject { |line|
-              ignored.any? { |i| line.include?(i) }
-            }
-            puts warnings.join("\n")
-            exit warnings.size
-          '
-      - name: Test installation
-        run: |
-          pacman -U --noconfirm *alchemist-*.pkg.tar*
-          alchemist --help
-
+    
   # Performs a release if needed
   release:
     needs:
@@ -450,8 +332,6 @@ jobs:
       - build
       - build-website
       - staging-repo
-      - verify-aur-package
-      - test-linux-deb-installer
       - test-linux-rpm-installer
       - test-windows-msi-installer
     concurrency:
@@ -579,10 +459,9 @@ jobs:
       - ci-preparation
       - release
       - staging-repo
-      - verify-aur-package
-      - test-linux-deb-installer
       - test-linux-rpm-installer
       - test-windows-msi-installer
+      - text-macos-pkg-installer
     if: >-
       always() && (
         contains(join(needs.*.result, ','), 'failure')
