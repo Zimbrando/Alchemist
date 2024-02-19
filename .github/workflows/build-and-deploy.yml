@@ -311,6 +311,8 @@ jobs:
       - assemble-and-upload
       - ci-preparation
     runs-on: macos-12
+    if: >-
+      always() && needs.assemble-and-upload.result == 'success'
     concurrency:
       group: test-macos-pkg-installer-${{ needs.ci-preparation.outputs.build-ref }}
       cancel-in-progress: true
