@@ -298,9 +298,10 @@ jobs:
         uses: actions/download-artifact@v4.1.2
         with:
           name: installer-package-${{ github.sha }}-${{ runner.os }}
+      - name: Install bsdtar
+        run: sudo apt update && sudo apt install libarchive-tools
       - name: Install packages
         run: |
-          yum check-update || [ $? -eq 100 ]
           mkdir install
           for installer in *.rpm; do
             bsdtar -xf $installer -C install
